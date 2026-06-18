@@ -10,12 +10,15 @@ services:
       - .env.docker
     volumes:
       - .:/app
-      - nodemodules13-volume:/app/node_modules
+      - nodemodules14-volume:/app/node_modules
     depends_on:
       - postgres-container
+      - rabbitmq-container
     environment:
       POSTGRES_HOST: postgres_host
       POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq_host
+      RABBITMQ_PORT: 5672
     restart: unless-stopped
     networks:
       app-network:
@@ -32,16 +35,43 @@ services:
       - .env.docker
     volumes:
       - .:/app
-      - nodemodules13-volume:/app/node_modules
+      - nodemodules14-volume:/app/node_modules
     depends_on:
       - postgres-container
+      - rabbitmq-container
     environment:
       POSTGRES_HOST: postgres_host
       POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq_host
+      RABBITMQ_PORT: 5672
     networks:
       app-network:
         aliases:
             - nodecommand_host
+
+  #NODE WORKER
+  nodeworker-container:
+    build:
+      context: .
+      dockerfile: docker/node-worker/Dockerfile
+    env_file: 
+      - .env
+      - .env.docker
+    volumes:
+      - .:/app
+      - nodemodules14-volume:/app/node_modules
+    depends_on:
+      - postgres-container
+      - rabbitmq-container
+    environment:
+      POSTGRES_HOST: postgres_host
+      POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq_host
+      RABBITMQ_PORT: 5672
+    networks:
+      app-network:
+        aliases:
+            - nodeworker_host
 
   #NGINX
   nginx-container:
@@ -71,17 +101,33 @@ services:
     ports:
       - "${POSTGRES_PORT}:5432"
     volumes:
-      - postgres13-volume:/var/lib/postgresql
+      - postgres14-volume:/var/lib/postgresql
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
     networks:
       app-network:
         aliases:
           - postgres_host
 
+  rabbitmq-container:
+    image: rabbitmq:3.13.1-management-alpine
+    ports:
+      - "5672:5672"    # Porta para conexão com a fila (producers/consumers)
+      - "15672:15672"              # Porta do painel de gerenciamento web
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbbitmq14-volume:/var/lib/rabbitmq
+    networks:
+      app-network:
+        aliases:
+          - rabbitmq_host
+
 networks:
   app-network:
     driver: bridge
 
 volumes:
-  postgres13-volume:
-  nodemodules13-volume:
+  postgres14-volume:
+  nodemodules14-volume:
+  rabbbitmq14-volume:

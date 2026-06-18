@@ -38,19 +38,32 @@ Windows (CMD):
 copy .env.example .env
 ```
 
-5. Editar o arquivo `.env` e definir a senha do banco (**ALTERE AQUI**):
+5. Editar o arquivo `.env` e definir as credenciais do banco e do RabbitMQ:
 
 ```env
 POSTGRES_HOST=localhost
 POSTGRES_DB=unifaat_dw
 POSTGRES_PORT=6789
 POSTGRES_USER=unifaat_user
-POSTGRES_PASSWORD=**COLOQUE_SUA_SENHA_AQUI**
+POSTGRES_PASSWORD=123456
 
-JWT_SECRET=**COLOQUE_SUA_CHAVE_SECRETA_AQUI**
+RABBITMQ_HOST=localhost
+RABBITMQ_PORT=5672
+RABBITMQ_USER=unifaat
+RABBITMQ_PASSWORD=123456
+
+JWT_SECRET=segredo
 
 NODE_WEB_PORT=3000
 ```
+
+6. Executar as migrations obrigatoriamente antes de rodar a aplicação ou os comandos:
+
+```sh
+node _command.js migrate
+```
+
+> No ambiente Docker, use também `.env.docker` com `IS_DOCKER=true`.
 
 ---
 
@@ -64,36 +77,13 @@ Após o banco estar pronto, execute as migrations:
 node _command.js migrate
 ```
 
-Saída esperada:
-```
-Executando: 001_create_users_table.js
-Executada: 001_create_users_table.js
-Executando: 002_create_addresses_table.js
-Executada: 002_create_addresses_table.js
-Executando: 003_create_courses_table.js
-Executada: 003_create_courses_table.js
-Executando: 004_create_course_user_table.js
-Executada: 004_create_course_user_table.js
-Migrations finalizadas.
-```
-
 ### Executar Seeds
-
-Após as migrations, popular o banco com dados de exemplo:
 
 ```sh
 node _command.js seed
 ```
 
-Saída esperada:
-```
-Executando seed inicial...
-Seed concluída com sucesso.
-```
-
 ### Reverter Última Migração
-
-Para desfazer o último batch de migrations:
 
 ```sh
 node _command.js migrate:rollback
@@ -101,9 +91,53 @@ node _command.js migrate:rollback
 
 ---
 
+## 🧠 Jobs e Fila RabbitMQ
+
+### Criar um Job
+
+Os jobs ficam em `app/Jobs/` e devem ser exportados usando `createJob({ name, handle })`.
+
+Exemplo `app/Jobs/ExampleJob.js`:
+
+```js
+import { createJob } from '../../utils/job.js'
+
+export default createJob({
+    name: 'ExampleJob',
+    handle: async (payload) => {
+        const { name } = payload
+        console.log(`Enviando e-mail de boas-vindas para o usuário ${name}`)
+    }
+})
+```
+
+### Despachar um Job para a Fila
+
+Use o método `dispatch()` do job exportado. O job será enviado para a fila RabbitMQ especificada.
+
+Exemplo:
+
+```js
+import ExampleJob from './app/Jobs/ExampleJob.js'
+
+await ExampleJob.dispatch('default', { name: 'luan' })
+```
+
+### Executar o Worker
+
+O worker lê jobs da fila RabbitMQ e executa o `handle(payload)` correspondente.
+
+```sh
+node _worker.js --queue=default
+```
+
+Se `--queue` não for informado, o worker usa a fila `default`.
+
+---
+
 ## �🚀 Servidor Backend Node
 
-6. Iniciar o servidor:
+Iniciar o servidor localmente:
 
 ```sh
 node _web.js
@@ -121,7 +155,19 @@ Após configurar o `.env`, basta subir os containers:
 docker compose up
 ```
 
-O servidor web estará disponível em: http://localhost:8080
+A aplicação web ficará disponível em: http://localhost:8080
+
+---
+
+## 🔄 Comandos
+
+O projeto usa `_command.js` para registrar comandos em `app/Commands/`.
+
+Exemplo de comando de jobs:
+
+```sh
+node _command.js create-example-job
+```
 
 ---
 
@@ -149,6 +195,8 @@ npm install --save-dev nodemon
 unifaat-2026-dw-project/
 ├── app/
 │   ├── Commands/
+│   │   ├── CreateExampleJobCommand.js
+│   │   ├── ListTablesCommand.js
 │   │   ├── MigrationCommand.js
 │   │   ├── MigrationRollbackCommand.js
 │   │   ├── SeedCommand.js
@@ -186,6 +234,8 @@ unifaat-2026-dw-project/
 │   │   │   ├── AuthMiddleware.js
 │   │   │   └── VerifyImageMiddleware.js
 │   │   ├── SwaggerDoc.js
+│   ├── Jobs/
+│   │   └── ExampleJob.js
 │   └── Models/
 │       ├── AddressModel.js
 │       ├── CourseModel.js
@@ -197,6 +247,7 @@ unifaat-2026-dw-project/
 ├── database/
 │   ├── connections/
 │   │   ├── postgres.js
+│   │   ├── rabbit.js
 │   │   └── sequelize.js
 │   ├── migrations/
 │   │   ├── 001_create_users_table.js
@@ -213,6 +264,8 @@ unifaat-2026-dw-project/
 │   ├── node-command/
 │   │   └── Dockerfile
 │   ├── node-web/
+│   │   └── Dockerfile
+│   ├── node-worker/
 │   │   └── Dockerfile
 │   └── postgres/
 │       └── init/
@@ -240,10 +293,13 @@ unifaat-2026-dw-project/
 ├── tests/
 │   └── example.test.js
 ├── utils/
+│   ├── job.js
 │   ├── loadCommands.js
+│   ├── loadJobs.js
 │   └── migrationUtils.js
 ├── _command.js
 ├── _web.js
+├── _worker.js
 ├── docker-compose.yml
 ├── insomnia.json
 ├── package.json
@@ -287,12 +343,14 @@ unifaat-2026-dw-project/
 
 ## 📦 Containers Docker
 
-| Container           | Host            | Porta Interna | Porta Externa (localhost) |
-|--------------------|-----------------|---------------|---------------|
-| postgres-container | postgres_host   | 5432          | 6789          |
-| nodeweb-container | nodeweb_host   | 3000          | -         |
-| nodecommand-container | nodecommand_host   | -          | -         |
-| nginx-container | nginx-container   | 80          | 8080          |
+| Container              | Host              | Porta Interna | Porta Externa (localhost) |
+|------------------------|-------------------|---------------|---------------------------|
+| postgres-container     | postgres_host     | 5432          | 6789                      |
+| rabbitmq-container     | rabbitmq_host     | 5672          | 5672                      |
+| nodeweb-container      | nodeweb_host      | 3000          | -                         |
+| nodecommand-container  | nodecommand_host  | -             | -                         |
+| nodeworker-container   | nodeworker_host   | -             | -                         |
+| nginx-container        | nginx-container   | 80            | 8080                      |
 
 ### Executar Commands no Docker
 
@@ -420,181 +478,4 @@ export default {
 | `seed` | - | Popula o banco com dados iniciais |
 | `test` | - | Executa testes |
 
----
-
-## 📋 Tutorial: Criando e Executando Testes
-
-### Como Criar um Novo Teste
-
-1. **Crie o arquivo de teste** em `tests/`:
-
-```javascript
-// tests/myFeature.test.js
-
-import assert from 'node:assert'
-
-function calculateDiscount(price, discountPercent) {
-    return price * (1 - discountPercent / 100)
-}
-
-function validateEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-}
-
-export default {
-    name: 'Feature Tests',
-    
-    async run() {
-        const tests = [
-            {
-                name: 'calculateDiscount: 10% de desconto em R$ 100 deve ser R$ 90',
-                fn: () => {
-                    const result = calculateDiscount(100, 10)
-                    assert.strictEqual(result, 90, 'Desconto incorreto')
-                }
-            },
-            {
-                name: 'validateEmail: email válido deve passar',
-                fn: () => {
-                    const result = validateEmail('user@example.com')
-                    assert.strictEqual(result, true, 'Email deveria ser válido')
-                }
-            },
-            {
-                name: 'validateEmail: email inválido deve falhar',
-                fn: () => {
-                    const result = validateEmail('invalid-email')
-                    assert.strictEqual(result, false, 'Email deveria ser inválido')
-                }
-            }
-        ]
-
-        let passed = 0
-        let failed = 0
-
-        for (const test of tests) {
-            try {
-                await test.fn()
-                console.log(`✓ ${test.name}`)
-                passed++
-            } catch (error) {
-                console.error(`✗ ${test.name}`)
-                console.error(`  ${error.message}`)
-                failed++
-            }
-        }
-
-        console.log(`\nResultado: ${passed} passou, ${failed} falhou`)
-
-        return failed === 0
-    }
-}
-```
-
-2. **Pronto!** O teste será automaticamente carregado e executado.
-
-### Estrutura de um Teste
-
-Cada arquivo de teste deve exportar um objeto padrão com:
-
-```javascript
-export default {
-    // Nome da suite de testes
-    name: 'Suite Name',
-    
-    // Função assíncrona que executa todos os testes
-    async run() {
-        // Definir testes
-        const tests = [
-            {
-                name: 'Descrição do teste',
-                fn: () => {
-                    // Usar assert para validações
-                    assert.strictEqual(resultado, esperado)
-                }
-            }
-        ]
-
-        // Executar testes
-        let passed = 0, failed = 0
-        for (const test of tests) {
-            try {
-                await test.fn()
-                console.log(`✓ ${test.name}`)
-                passed++
-            } catch (error) {
-                console.error(`✗ ${test.name}`)
-                console.error(`  ${error.message}`)
-                failed++
-            }
-        }
-
-        // Retornar true se todos passarem
-        return failed === 0
-    }
-}
-```
-
-### Usando Assert
-
-O `assert` nativo do Node.js fornece várias funções úteis:
-
-```javascript
-import assert from 'node:assert'
-
-// Igualdade estrita
-assert.strictEqual(2 + 2, 4, 'Mensagem de erro')
-
-// Igualdade profunda (objetos)
-assert.deepStrictEqual({ a: 1 }, { a: 1 })
-
-// Verdadeiro/Falso
-assert.ok(true, 'Deveria ser verdadeiro')
-
-// Falha um teste explicitamente
-assert.fail('Este teste falhou')
-
-// Verificar se é uma instância
-assert(value instanceof MyClass)
-
-// Throws: verificar se função lança erro
-assert.throws(() => {
-    throw new Error('Erro esperado')
-})
-```
-
-### Como Executar Testes
-
-**Na máquina local:**
-
-```sh
-node _command.js test
-```
-
-**Dentro do Docker (efêmero):**
-
-```sh
-docker compose run --rm nodecommand-container node _command.js test
-```
-
-### Exemplo de Saída
-
-```
-Executando 1 arquivo(s) de teste...
-
-📋 Example Tests
-──────────────────────────────────────────────────
-
-✓ sum: 2 + 3 deve ser 5
-✓ multiply: 4 * 5 deve ser 20
-✓ isEven: 4 deve ser par
-✓ isEven: 5 não deve ser par
-
-Resultado: 4 passou, 0 falhou
-
-==================================================
-✓ 1 suite(s) passou
-✗ 0 suite(s) falhou
-==================================================
-```
 
